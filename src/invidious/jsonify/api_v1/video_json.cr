@@ -188,11 +188,20 @@ module Invidious::JSONify::APIv1
 
       json.field "captions" do
         json.array do
-          video.captions.each do |caption|
+          video.captions.each_with_index do |caption, i|
             json.object do
               json.field "label", caption.name
               json.field "language_code", caption.language_code
               json.field "url", "/api/v1/captions/#{video.id}?label=#{URI.encode_www_form(caption.name)}"
+            end
+          end
+          if video.captions.size > 0
+            caption = video.captions[0]
+            translate_lang = "zh-Hans"
+            json.object do
+              json.field "label", "bilingual"
+              json.field "language_code", "#{translate_lang}+#{caption.language_code}"
+              json.field "url", "/api/v1/captions/#{video.id}?label=#{URI.encode_www_form(caption.name)}&tlang=#{translate_lang}"
             end
           end
         end

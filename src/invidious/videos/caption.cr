@@ -84,6 +84,77 @@ module Invidious::Videos
 
         return result
       end
+
+      def combine_two_timedtext(timedtext : String, timedtext_2 : String) : String
+        cues = [] of XML::Node
+        tree = XML.parse(timedtext)
+        tree = tree.children.first
+
+        tree.children.each do |item|
+          if item.name == "body"
+            item.children.each do |cue|
+              if cue.name == "p" && !(cue.children.size == 1 && cue.children[0].content == "\n")
+                cues << cue
+              end
+            end
+            break
+          end
+        end
+
+        cues_2 = Hash(String, XML::Node).new
+        tree_2 = XML.parse(timedtext_2)
+        tree_2 = tree_2.children.first
+
+        tree_2.children.each do |item|
+          if item.name == "body"
+            item.children.each do |cue|
+              if cue.name == "p" && !(cue.children.size == 1 && cue.children[0].content == "\n")
+                cues_2[cue["t"]] = cue
+              end
+            end
+            break
+          end
+        end
+
+        result = XML.build(indent: "  ") do |xml|
+          xml.element("timedtext", format: "3") do
+            xml.element("body") do
+              cue2_size = cues_2.size
+              cues.each_with_index do |node, i|
+                text = String.build do |io|
+                  node.children.each do |s|
+                    if s.content == "\n" || s.content == "\r\n"
+                      s.content = " "
+                    end
+                    io << s.content.gsub("\n", " ") 
+                  end
+                  if node.children.size > 0
+                    io << "\n"
+                  end
+                  if cues_2.has_key?(node["t"])
+                    cues_2[node["t"]].children.each do |s|
+                      if s.content == "\n" || s.content == "\r\n"
+                        s.content = ""
+                      end
+                      io << s.content.gsub("\n", " ") 
+                    end
+                  end
+                end
+
+                xml.element("p", t: node["t"], d: node["d"]) do
+                  { xml.text text }
+                end
+              end
+            end
+          end
+        end
+
+        return result
+      end
+      
+      def combine_two_vtt(vtt : String, vtt_2 : String, tlang = nil) : String
+        return vtt + vtt_2
+      end
     end
 
     # List of all caption languages available on Youtube.

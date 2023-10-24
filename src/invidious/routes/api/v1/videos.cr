@@ -58,11 +58,20 @@ module Invidious::Routes::API::V1::Videos
         json.object do
           json.field "captions" do
             json.array do
-              captions.each do |caption|
+              captions.each_with_index do |caption, i|
                 json.object do
                   json.field "label", caption.name
                   json.field "languageCode", caption.language_code
                   json.field "url", "/api/v1/captions/#{id}?label=#{URI.encode_www_form(caption.name)}"
+                end
+              end
+              if captions.size > 0
+                caption = captions[0]
+                translate_lang = "zh-Hans"
+                json.object do
+                  json.field "label", "bilingual"
+                  json.field "languageCode", "#{translate_lang}+#{caption.language_code}"
+                  json.field "url", "/api/v1/captions/#{video.id}?lang=#{caption.language_code}&tlang=#{translate_lang}"
                 end
               end
             end
@@ -74,7 +83,7 @@ module Invidious::Routes::API::V1::Videos
     end
 
     env.response.content_type = "text/vtt; charset=UTF-8"
-
+  
     if lang
       caption = captions.select(&.language_code.== lang)
     else
@@ -94,68 +103,29 @@ module Invidious::Routes::API::V1::Videos
       webvtt = Invidious::Videos::Transcript.convert_transcripts_to_vtt(initial_data, caption.language_code)
     else
       # Timedtext API handling
-      url = URI.parse("#{caption.base_url}&tlang=#{tlang}").request_target
-
-      # Auto-generated captions often have cues that aren't aligned properly with the video,
-      # as well as some other markup that makes it cumbersome, so we try to fix that here
-      if caption.name.includes? "auto-generated"
-        caption_xml = YT_POOL.client &.get(url).body
-
-        settings_field = {
-          "Kind"     => "captions",
-          "Language" => "#{tlang || caption.language_code}",
-        }
-
-        if caption_xml.starts_with?("<?xml")
-          webvtt = caption.timedtext_to_vtt(caption_xml, tlang)
-        else
-          caption_xml = XML.parse(caption_xml)
-
-          webvtt = WebVTT.build(settings_field) do |webvtt|
-            caption_nodes = caption_xml.xpath_nodes("//transcript/text")
-            caption_nodes.each_with_index do |node, i|
-              start_time = node["start"].to_f.seconds
-              duration = node["dur"]?.try &.to_f.seconds
-              duration ||= start_time
-
-              if caption_nodes.size > i + 1
-                end_time = caption_nodes[i + 1]["start"].to_f.seconds
-              else
-                end_time = start_time + duration
-              end
-
-              text = HTML.unescape(node.content)
-              text = text.gsub(/<font color="#[a-fA-F0-9]{6}">/, "")
-              text = text.gsub(/<\/font>/, "")
-              if md = text.match(/(?<name>.*) : (?<text>.*)/)
-                text = "<v #{md["name"]}>#{md["text"]}</v>"
-              end
-
-              webvtt.cue(start_time, end_time, text)
-            end
-          end
-        end
-      else
-        webvtt = YT_POOL.client &.get("#{url}&fmt=vtt").body
-
-        if webvtt.starts_with?("<?xml")
-          webvtt = caption.timedtext_to_vtt(webvtt)
-        else
-          # Some captions have "align:[start/end]" and "position:[num]%"
-          # attributes. Those are causing issues with VideoJS, which is unable
-          # to properly align the captions on the video, so we remove them.
-          #
-          # See: https://github.com/iv-org/invidious/issues/2391
-          webvtt = webvtt.gsub(/([0-9:.]{12} --> [0-9:.]{12}).+/, "\\1")
+      ori_url = URI.parse("#{caption.base_url}").request_target
+      url = "#{ori_url}&tlang=#{tlang}"
+      caption_xml = YT_POOL.client &.get(url).body
+      if tlang
+        caption_xml_ori = YT_POOL.client &.get(ori_url).body
+        if caption_xml_ori
+          caption_xml = caption.combine_two_timedtext(caption_xml_ori, caption_xml)
         end
       end
+      webvtt = caption.timedtext_to_vtt(caption_xml, tlang)
+      # Some captions have "align:[start/end]" and "position:[num]%"
+      # attributes. Those are causing issues with VideoJS, which is unable
+      # to properly align the captions on the video, so we remove them.
+      #
+      # See: https://github.com/iv-org/invidious/issues/2391
+      webvtt = webvtt.gsub(/([0-9:.]{12} --> [0-9:.]{12}).+/, "\\1")
     end
 
     if title = env.params.query["title"]?
       # https://blog.fastmail.com/2011/06/24/download-non-english-filenames/
       env.response.headers["Content-Disposition"] = "attachment; filename=\"#{URI.encode_www_form(title)}\"; filename*=UTF-8''#{URI.encode_www_form(title)}"
     end
-
+    
     webvtt
   end
 
